@@ -1,0 +1,348 @@
+# setwd()
+
+library(spdep)
+library(plyr)
+library(dplyr)
+library(nimble)
+library(tidyr)
+library(ggplot2)
+library(see)
+library(coda)
+library(parallel)
+
+  
+# Read in release data
+ab_rel <- read.csv('TT_COX_ab_BAND.csv')
+mb_rel <- read.csv('TT_COX_mb_BAND.csv')
+sk_rel <- read.csv('TT_COX_sk_BAND_excludingMALL.csv')
+
+rel <- rbind.data.frame(ab_rel,mb_rel,sk_rel)
+
+# retain Blue-winged Teal
+bw_teal <- subset(rel, SPECIES_NAME == 'Blue-winged Teal')
+
+# wild-caught, released alive
+clean.band <-subset(bw_teal,BIRD_STATUS==3)      
+start <- 1961
+#only use Birds released after start
+clean.band<-subset(clean.band,BANDING_YEAR>=start)        
+
+#remove unknown sex
+clean.band<-subset(clean.band,SEX_CODE!=0)               
+clean.band<-subset(clean.band,SEX_CODE!=6)                
+clean.band<-subset(clean.band,SEX_CODE!=7)               
+#remove unknown age
+clean.band<-subset(clean.band,AGE_CODE!=0) 
+
+# types of Blue-winged Teal releases
+# 0      1  (color)    2  (collar)   14 (mouth swab)     16 (trachea swab)    18  (bled)  25  (2 marks)  39 (patagial/wing tag)   
+# 51 (nasal saddle)    59 (web-tag)     70 (spotlighted)    80 (transmitter)    85  (misc)    89 (transmitter)
+
+clean.band<-subset(clean.band,  EXTRA_INFO_CODE==0 |  EXTRA_INFO_CODE==14 |  EXTRA_INFO_CODE==16 |  EXTRA_INFO_CODE==18| 
+                     EXTRA_INFO_CODE==51 | EXTRA_INFO_CODE==70 | EXTRA_INFO_CODE==85)
+
+# retain teal banded before the hunting season
+clean.band<-subset(clean.band, BANDING_MONTH > 6 & BANDING_MONTH < 10)
+
+# Clean up age data
+clean.band$Age_Verbal <- ifelse(clean.band$AGE_CODE == 1, 'AHY',
+                                ifelse(clean.band$AGE_CODE == 2, 'HY',
+                                       ifelse(clean.band$AGE_CODE == 4, 'L',
+                                                     ifelse(clean.band$AGE_CODE == 6, 'ASY', NA))))
+clean.band$Age <- ifelse(clean.band$AGE_CODE == 1, 2,
+                         ifelse(clean.band$AGE_CODE == 2, 1,
+                                ifelse(clean.band$AGE_CODE == 4, 1,
+                                              ifelse(clean.band$AGE_CODE == 6, 2, NA))))
+                 
+# remove banding mortalities
+clean.band <- subset(clean.band, BAND_TYPE_CODE != 98)
+
+# delineate the mail-in era from the phone/internet age. 
+clean.band$BAND_TYPE <- ifelse(clean.band$BAND_TYPE_CODE == '11'| clean.band$BAND_TYPE_CODE == '18'| clean.band$BAND_TYPE_CODE == '21'|  clean.band$BAND_TYPE_CODE == '51' , 1,
+                          ifelse(clean.band$BAND_TYPE_CODE  == '01' |clean.band$BAND_TYPE_CODE  == '04'|clean.band$BAND_TYPE_CODE  == '41' | clean.band$BAND_TYPE_CODE == '53' |clean.band$BAND_TYPE_CODE == '82' | clean.band$BAND_TYPE_CODE == 'W1', 2,
+                                 NA))
+
+
+# Read in encounter data
+
+raw.enc <-read.csv("TT_COX_ENC.csv")  #reading in CSV
+#------------------------------------------------------------------------------#
+# Subset encounters to only consider individuals retained in the release file
+#------------------------------------------------------------------------------#
+enc_released <- raw.enc[raw.enc$ORIGINAL_BAND %in% clean.band$ORIGINAL_BAND,]
+
+# Reduce the spatial dimensions of the encounter area to this block
+enc_released <- subset(enc_released, E_LAT_DECIMAL_DEGREES < 55 & E_LAT_DECIMAL_DEGREES > -5 & E_LON_DECIMAL_DEGREES < -50 & E_LON_DECIMAL_DEGREES > -125)
+
+# Harvested
+shot <- subset(enc_released, E_HOW_OBTAINED_CODE == 1)
+# Direct recoveries only
+direct <- subset(shot, HSS == 1)
+
+direct$Age_Verbal <- ifelse(direct$B_AGE_CODE == 1, 'AHY',
+                                ifelse(direct$B_AGE_CODE == 2, 'HY',
+                                       ifelse(direct$B_AGE_CODE == 4, 'L',
+                                              ifelse(direct$B_AGE_CODE == 6, 'ASY', NA))))
+
+direct$Age <- ifelse(direct$B_AGE_CODE == 1, 2,
+                         ifelse(direct$B_AGE_CODE == 2, 1,
+                                ifelse(direct$B_AGE_CODE == 4, 1,
+                                       ifelse(direct$B_AGE_CODE == 6, 2, NA))))
+
+# remove recoveries with no spatial information
+direct <- subset(direct, E_10_MIN_BLOCK != 0)
+
+# Scale-down spatial information to 4 degree blocks
+direct$Lat_1 <- round_any(direct$E_LAT_DECIMAL_DEGREES,4)
+direct$Lon_1 <- round_any(direct$E_LON_DECIMAL_DEGREES,4)
+direct$Block <- paste(direct$Lat_1,"-",direct$Lon_1,sep = '' )
+
+# unique blocks with a recovery
+blocks <- direct[!duplicated(direct$Block ),]
+study_points <- cbind.data.frame(Block = blocks$Block, long = blocks$Lon_1, lat = blocks$Lat_1, order = 1:length(blocks$Lon_1))
+
+
+# plot spatial extent of the recoveries
+ggplot() + 
+  geom_polygon(data = world, aes(x = long, y = lat, group = group), color = 'black', fill = 'white') + 
+  geom_point(data = study_points, aes(x = long, y = lat), color = 'red') +  
+  # geom_point(aes(x = -116, y = 76), color = 'black', size = 5) +
+  # geom_point(aes(x = -28, y = 40), color = 'black', size = 5) +
+  # geom_point(aes(x = -44, y = -4), color = 'black', size = 5) +
+  # geom_point(aes(x = -52, y = -32), color = 'black', size = 5) +
+  coord_quickmap(ylim=c(-40,80), xlim = c(-150,-20)) + theme_modern()
+
+# generate the parameter constructs to fit a conditional autoregressive model in Nimble
+blockcoord <- cbind(study_points$long,study_points$lat)
+neigh      <- dnearneigh(blockcoord, d1 = 0, d2 = 1000, longlat = TRUE)
+winnb      <- nb2WB(neigh)    
+
+direct$count <- 1
+
+releases   <- clean.band %>% group_by(SEX_CODE,Age,BANDING_YEAR ) %>% summarize_at('BAND_NUM', length)
+encounters <-   direct %>% group_by(B_SEX_CODE,Age,BANDING_YEAR,Block ) %>% summarize_at('count', sum)
+
+encounters <- left_join(encounters,study_points)
+encs <- encounters[,c('BANDING_YEAR','Age','B_SEX_CODE', 'order', 'count')]  %>% group_by(Age,B_SEX_CODE)  %>% spread(order, count, fill = 0) 
+
+# Age and Sex-specific encounter and release data files
+enc_H_M <- data.matrix(subset(encs, Age == 1 & B_SEX_CODE == 4))
+enc_A_M <- data.matrix(subset(encs, Age == 2 & B_SEX_CODE == 4))
+enc_H_F <- data.matrix(subset(encs, Age == 1 & B_SEX_CODE == 5))
+enc_A_F <- data.matrix(subset(encs, Age == 2 & B_SEX_CODE == 5))
+
+rel_H_M <- subset(releases, Age == 1 & SEX_CODE == 4)[,c('BANDING_YEAR', 'BAND_NUM')]
+rel_A_M <- subset(releases, Age == 2 & SEX_CODE == 4)[,c('BANDING_YEAR', 'BAND_NUM')]
+rel_H_F <- subset(releases, Age == 1 & SEX_CODE == 5)[,c('BANDING_YEAR', 'BAND_NUM')]
+rel_A_F <- subset(releases, Age == 2 & SEX_CODE == 5)[,c('BANDING_YEAR', 'BAND_NUM')]
+
+# number of spatial "blocks"
+blocks <- nrow(blockcoord)
+
+# release cohort ~ block ~ type direct recovery m-arrays
+marr   <- array(0, dim = c(nrow(enc_H_M),blocks+1, 4))
+
+for(i in 1:62){
+  for(j in 1:blocks){
+    marr[i,j,1] <- enc_H_M[i,j+3]
+    marr[i,j,2] <- enc_H_F[i,j+3]
+    marr[i,j,3] <- enc_A_M[i,j+3]
+    marr[i,j,4] <- enc_A_F[i,j+3]
+  }
+
+    marr[i,(blocks+1),1] <- rel_H_M$BAND_NUM[i] - sum(marr[i,1:blocks,1])
+    marr[i,(blocks+1),2] <- rel_H_F$BAND_NUM[i] - sum(marr[i,1:blocks,2])
+    marr[i,(blocks+1),3] <- rel_A_M$BAND_NUM[i] - sum(marr[i,1:blocks,3])
+    marr[i,(blocks+1),4] <- rel_A_F$BAND_NUM[i] - sum(marr[i,1:blocks,4])
+}
+
+
+rel <- apply(marr, c(1,3), sum)
+
+
+reporting <- read.csv("Estimated reporting rates, MALL & NOPI, 1948 to 2010.csv",header=TRUE)
+reporting <- subset(reporting, year >= 1961 )
+MU_R1 <- reporting$NOPI.rho
+SD_R1 <- reporting$NOPI.rho.SD
+
+MU_R <- c(MU_R1, rep(MU_R1[50], 62-50))
+SD_R <- c(SD_R1, rep(SD_R1[50], 62-50))
+
+# Nimble Model
+nimble.car <- nimbleCode({
+  
+  # Arnold et al 2018 meta-analysis used as a prior for reporting rate 
+  for (t in 1:n.year){
+    rr[t] ~ dbeta(alpha.rr[t], beta.rr[t])
+    alpha.rr[t] <- pow(SD.rr[t],-2) * RR.rr[t]
+    beta.rr[t] <- pow(SD.rr[t],-2) * (1 - RR.rr[t])
+  }
+  # Priors for the directional shifts in spatial distribution parameters
+  for(i in 1:2){
+    mu_lat[i]  ~ dlogis(0,1)
+    mu_lon[i]  ~ dlogis(0,1)
+    sig_lat[i]  ~ T(dt(0, pow(2.5, -2), 1),0,)
+    sig_lon[i]  ~ T(dt(0, pow(2.5, -2), 1),0,)
+  }  
+  # temporal patterns in spatial distribution
+  for(j in 1:n.year){
+    b.lat[j] ~ dnorm(mu_lat[1], sd = sig_lat[1]) # South <-> North
+    b.lon[j] ~ dnorm(mu_lon[1], sd = sig_lon[1]) # West <-> East
+    a.lat[j] ~ dnorm(mu_lat[2], sd = sig_lat[2]) # Center <-> North or South
+    a.lon[j] ~ dnorm(mu_lon[2], sd = sig_lon[2]) # Center <-> West or East
+  }
+  
+  # Type-specific global intercept/error
+  for(s in 1:4){  
+     mu[s] ~ dlogis(0,1)
+    sig[s] ~ T(dt(0, pow(2.5, -2), 1),0,)
+    # Type by block-specific intercept
+    for(k in 1:N.block){
+      b0[s,k] ~ dnorm(mu[s], sd = sig[s])
+    }
+  }
+  # CAR error term
+    tau ~ T(dt(0, pow(2.5, -2), 1),0,)
+  # Overdisperion term
+  omega ~ T(dt(0, pow(2.5, -2), 1),0,)
+  
+  for(j in 1:n.year){
+   # spatiotemporal variation in harvest generated from a conditional autoregressive model
+    eps[1:N.block,j] ~ dcar_normal(adj[1:L.block], weights[1:L.block], num[1:N.block], tau, zero_mean = 1)
+    for(s in 1:4){  
+      for(k in 1:N.block){
+      # Log-linear model describing spatio-temporal variation in the harvest process
+        psi0[j,k,s] <- exp(b0[s,k] + eps[k,j] + b.tr[era[j]] * year[j] + 
+                             b.lat[j] * lat[k] + # South->North
+                             b.lon[j] * lon[k] + # West -> East
+                             a.lat[j] * alat[k]+ # Central -> North or South
+                             a.lon[j] * alon[k]) # Central -> Pacific/Mississippi 
+      }
+      psi0[j,(N.block +1),s] <- 1
+      for(k in 1:(N.block+1)){
+      # Multinomial link function
+        psi[j,k,s] <- psi0[j,k,s]/sum( psi0[j,1:(N.block +1),s])
+      # Post-hoc correction for reporting rate
+        h[j,k,s] <-  psi[j,k,s]/rr[j]
+      }
+      # Multinomial likelihood
+      y[j,1:(N.block+1),s] ~ ddirchmulti(psi[j,1:(N.block+1),s] * omega,  Total[j,s])   
+    }
+  }
+  
+})
+  
+# Nimble constants
+  constants <- list(  RR.rr = MU_R,SD.rr = SD_R, n.year = 62, N.block = length(study_points$Block), L.block = length( winnb$weights),  lat = scale(study_points$lat)[,1], lon = scale(study_points$long)[,1],
+                      weights = winnb$weights, num = winnb$num, adj = winnb$adj, Total= rel, era = c(rep(1,35),rep(2,27)), 
+                      year = scale(1:62)[,1],
+                      alat = scale(abs(scale(study_points$lat)[,1]))[,1], alon = scale(abs(scale(study_points$long)[,1]))[,1])
+ # Nimble data
+  data <- list(y = marr)
+  
+ # Initial values
+  initsFunction <- function()list( tau =1, omega = 20000, eps = matrix(0, blocks, 62), mu = rep(-5,4), sig = rep(.1,4), b0 = matrix(-5,4,blocks), b.tr = c(0,0),
+                                   mu_lat = c(0,0), mu_lon = c(0,0), sig_lat = c(1,1), sig_lon = c(1,1), b.lat = rep(0,62), b.lon = rep(0,62), a.lat = rep(0,62), a.lon = rep(0,62)    )
+  inits <- initsFunction() 
+  
+  start_time <- Sys.time()
+  library(parallel)
+  library(coda)
+  
+  nc <- 3 # number of chains
+  
+  cl_teal <-makeCluster(nc,timeout=5184000)
+  
+  clusterExport(cl_teal, c("nimble.car", "inits", "data", "constants"))
+  
+  for (j in seq_along(cl_teal)) {
+    
+    inits <- initsFunction() 
+    clusterExport(cl_teal[j], "inits")
+  }
+  out <- clusterEvalQ(cl_teal, {
+  
+    library(nimble)
+    library(coda)
+  library(parallel)
+
+  ddirchmulti <- nimbleFunction(
+    run = function(x = double(1), alpha = double(1), size = double(0), 
+                   log = integer(0, default = 0)) {
+      returnType(double(0))
+      logProb <- lgamma(size+1) - sum(lgamma(x+1)) + lgamma(sum(alpha)) -
+        sum(lgamma(alpha)) + sum(lgamma(alpha + x)) -
+        lgamma(sum(alpha) + size)
+      if(log) return(logProb)
+      else return(exp(logProb))
+    })
+  
+  rdirchmulti <- nimbleFunction(
+    run = function(n = integer(0), alpha = double(1), size = double(0)) {
+      returnType(double(1))
+      if(n != 1) print("rdirchmulti only allows n = 1; using n = 1.")
+      p <- rdirch(1, alpha)
+      return(rmulti(1, size = size, prob = p))
+    })
+  
+  dInvGamma <- nimbleFunction (
+    run = function(x     = double(0),
+                   Shape = double(0, default=1), 
+                   Scale = double(0, default=1), 
+                   log   = integer(0, default = 0)) {
+      returnType(double(0))
+      logDensX = dgamma(x, shape=Shape, scale=Scale, log=TRUE) 
+      if (log) return(logDensX) else return(exp(logDensX)) 
+    }
+  )
+  
+  rInvGamma <- nimbleFunction (
+    run = function(n = integer(0, default=1),
+                   Shape = double(0, default=1), 
+                   Scale = double(0, default=1)) {
+      returnType(double(0))
+      if (n!=1)
+        stop("Only implimented for n=1")
+      x = rgamma(n=1, shape=Shape, scale=Scale)    
+      return(x)
+    }
+  )
+  
+  registerDistributions(list(dInvGamma = list(
+    BUGSdist = "dInvGamma(Shape,Scale)",
+    discrete = FALSE,
+    range    = c(0, Inf), 
+    pqAvail  = FALSE)))
+  
+  model <- nimbleModel( code = nimble.car, constants = constants,  dat =  data, inits = inits)
+  
+  model$initializeInfo()
+  model$calculate()
+  
+  modelConf  <- configureMCMC(model, useConjugacy = FALSE,thin2 = 5,monitors2 =  c('h','b0','b.lat','b.lon','a.lat','a.lon','b.tr','eps','psi') )
+  modelMCMC  <- buildMCMC( modelConf )
+  Cmodel     <- compileNimble(model)
+  CmodelMCMC <- compileNimble(modelMCMC)
+  
+  CmodelMCMC$run(20000, thin = 2, thin2 = 5,nburnin = 5000)
+  
+  return(list( as.mcmc(as.matrix(CmodelMCMC$mvSamples)),as.mcmc(as.matrix(CmodelMCMC$mvSamples2))))
+  })
+  
+  end_time <- Sys.time()
+  end_time - start_time
+  
+  samples2 <- list(chain1 =   out[[1]][[1]][-1,], 
+                   chain2 =   out[[2]][[1]][-1,], 
+                   chain3 =   out[[3]][[1]][-1,])
+  
+  samples1    <- list(chain1 =   out[[1]][[2]][-1,], 
+                      chain2 =   out[[2]][[2]][-1,], 
+                      chain3 =   out[[3]][[2]][-1,])
+  
+  mcmcList1 <- as.mcmc.list(lapply(samples1, mcmc))
+  mcmcList2 <- as.mcmc.list(lapply(samples2, mcmc))
+  
+  stopCluster(cl_teal)
+  
+  save(mcmcList1,mcmcList2, file = 'teal_results.rdata')
