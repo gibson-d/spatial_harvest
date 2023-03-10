@@ -212,7 +212,7 @@ nimble.car <- nimbleCode({
     for(s in 1:4){  
       for(k in 1:N.block){
       # Log-linear model describing spatio-temporal variation in the harvest process
-        psi0[j,k,s] <- exp(b0[s,k] + eps[k,j] + b.tr[era[j]] * year[j] + 
+        psi0[j,k,s] <- exp(b0[s,k] + eps[k,j] +  
                              b.lat[j] * lat[k] + # South->North
                              b.lon[j] * lon[k] + # West -> East
                              a.lat[j] * alat[k]+ # Central -> North or South
@@ -233,9 +233,9 @@ nimble.car <- nimbleCode({
 })
   
 # Nimble constants
-  constants <- list(  RR.rr = MU_R,SD.rr = SD_R, n.year = 62, N.block = length(study_points$Block), L.block = length( winnb$weights),  lat = scale(study_points$lat)[,1], lon = scale(study_points$long)[,1],
+  constants <- list(  RR.rr = MU_R,SD.rr = SD_R, n.year = 62, N.block = length(study_points$Block), L.block = length( winnb$weights), 
                       weights = winnb$weights, num = winnb$num, adj = winnb$adj, Total= rel, era = c(rep(1,35),rep(2,27)), 
-                      year = scale(1:62)[,1],
+                      lat = scale(study_points$lat)[,1], lon = scale(study_points$long)[,1],
                       alat = scale(abs(scale(study_points$lat)[,1]))[,1], alon = scale(abs(scale(study_points$long)[,1]))[,1])
  # Nimble data
   data <- list(y = marr)
@@ -319,12 +319,15 @@ nimble.car <- nimbleCode({
   model$initializeInfo()
   model$calculate()
   
-  modelConf  <- configureMCMC(model, useConjugacy = FALSE,thin2 = 5,monitors2 =  c('h','b0','b.lat','b.lon','a.lat','a.lon','b.tr','eps','psi') )
+  modelConf  <- configureMCMC(model, useConjugacy = FALSE,thin2 = 5,
+          monitors = c('tau','omega','mu','sig','mu_lat','mu_lon','sig_lat','sig_lon', 'b0','b.lat','b.lon','a.lat','a.lon'),
+                              monitors2 = c('h','psi'))
+  
   modelMCMC  <- buildMCMC( modelConf )
   Cmodel     <- compileNimble(model)
   CmodelMCMC <- compileNimble(modelMCMC)
   
-  CmodelMCMC$run(20000, thin = 2, thin2 = 5,nburnin = 5000)
+  CmodelMCMC$run(10000, thin = 2, thin2 = 5,nburnin = 5000)
   
   return(list( as.mcmc(as.matrix(CmodelMCMC$mvSamples)),as.mcmc(as.matrix(CmodelMCMC$mvSamples2))))
   })
