@@ -1,0 +1,400 @@
+setwd('\\\\r2d2.cnre.vt.edu\\R2D2\\Dan_G\\Harvest_Models')
+library(ggplot2)
+library(see)
+
+ab_rel <- read.csv('TT_COX_ab_BAND.csv')
+mb_rel <- read.csv('TT_COX_mb_BAND.csv')
+sk_rel <- read.csv('TT_COX_sk_BAND_excludingMALL.csv')
+sk_rel2 <- read.csv('TT_COX_sk_BAND_onlyMALL.csv') 
+
+rel <- rbind.data.frame(ab_rel,mb_rel,sk_rel,sk_rel2)
+
+bw_nopi <- subset(rel, SPECIES_NAME == 'Northern Pintail')
+
+clean.band <-subset(bw_nopi,BIRD_STATUS==3)      
+start <- 1961
+#only use Birds released after start
+clean.band<-subset(clean.band,BANDING_YEAR>=start)        
+
+#remove unknown sex
+clean.band<-subset(clean.band,SEX_CODE!=0)               
+clean.band<-subset(clean.band,SEX_CODE!=6)                
+clean.band<-subset(clean.band,SEX_CODE!=7)               
+#remove unknown age
+clean.band<-subset(clean.band,AGE_CODE!=0) 
+
+# 0      1  (color)    2  (collar)   14 (mouth swab)     16 (trachea swab)    18  (bled)  25  (2 marks)  39 (patagial/wing tag)   
+# 51 (nasal saddle)    59 (web-tag)     70 (spotlighted)    80 (transmitter)    85  (misc)    89 (transmitter)
+
+clean.band<-subset(clean.band,  EXTRA_INFO_CODE==0 | EXTRA_INFO_CODE== 8|  EXTRA_INFO_CODE==14 |  EXTRA_INFO_CODE==16 |  EXTRA_INFO_CODE==18| EXTRA_INFO_CODE== 19 | 
+                     EXTRA_INFO_CODE==51 | EXTRA_INFO_CODE==70 | EXTRA_INFO_CODE==85)
+
+clean.band   <- subset(clean.band, !grepl('TRANSMITTER',B_MARKER_LONG_DESC))
+
+clean.band<-subset(clean.band, BANDING_MONTH > 6 & BANDING_MONTH < 10)
+
+clean.band$Age_Verbal <- ifelse(clean.band$AGE_CODE == 1, 'AHY',
+                                ifelse(clean.band$AGE_CODE == 2, 'HY',
+                                       ifelse(clean.band$AGE_CODE == 4, 'L',
+                                                     ifelse(clean.band$AGE_CODE == 6, 'ASY', NA))))
+
+clean.band$Age <- ifelse(clean.band$AGE_CODE == 1, 2,
+                         ifelse(clean.band$AGE_CODE == 2, 1,
+                                ifelse(clean.band$AGE_CODE == 4, 1,
+                                              ifelse(clean.band$AGE_CODE == 6, 2, NA))))
+                 
+
+clean.band <- subset(clean.band, BAND_TYPE_CODE != 98)
+                                  
+clean.band$BAND_TYPE <- ifelse(clean.band$BAND_TYPE_CODE == '11'| clean.band$BAND_TYPE_CODE == '18'| clean.band$BAND_TYPE_CODE == '21'|  clean.band$BAND_TYPE_CODE == '51' , 1,
+                          ifelse(clean.band$BAND_TYPE_CODE  == '01' |clean.band$BAND_TYPE_CODE  == '04'|clean.band$BAND_TYPE_CODE  == '41' | clean.band$BAND_TYPE_CODE == '53' |clean.band$BAND_TYPE_CODE == '82' | clean.band$BAND_TYPE_CODE == 'W1', 2,
+                                 NA))
+
+
+raw.enc <-read.csv("TT_COX_ENC.csv")  #reading in CSV
+
+library(spdep)
+#------------------------------------------------------------------------------#
+# Subset encounters to only consider individuals retained in the release file
+#------------------------------------------------------------------------------#
+enc_released <- raw.enc[raw.enc$ORIGINAL_BAND %in% clean.band$ORIGINAL_BAND,]
+
+#enc_released <- subset(enc_released, E_LAT_DECIMAL_DEGREES < 60 & E_LAT_DECIMAL_DEGREES > 10 & E_LON_DECIMAL_DEGREES < -50 & E_LON_DECIMAL_DEGREES > -125)
+
+shot <- subset(enc_released, E_HOW_OBTAINED_CODE == 1)
+direct <- subset(shot, HSS == 1)
+
+direct$Age_Verbal <- ifelse(direct$B_AGE_CODE == 1, 'AHY',
+                                ifelse(direct$B_AGE_CODE == 2, 'HY',
+                                       ifelse(direct$B_AGE_CODE == 4, 'L',
+                                              ifelse(direct$B_AGE_CODE == 6, 'ASY', NA))))
+
+direct$Age <- ifelse(direct$B_AGE_CODE == 1, 2,
+                         ifelse(direct$B_AGE_CODE == 2, 1,
+                                ifelse(direct$B_AGE_CODE == 4, 1,
+                                       ifelse(direct$B_AGE_CODE == 6, 2, NA))))
+
+direct <- subset(direct, E_10_MIN_BLOCK != 0)
+library(plyr)
+direct$Lat_1 <- round_any(direct$E_LAT_DECIMAL_DEGREES,4)
+direct$Lon_1 <- round_any(direct$E_LON_DECIMAL_DEGREES,4)
+direct$Block <- paste(direct$Lat_1,"-",direct$Lon_1,sep = '' )
+
+blocks <- direct[!duplicated(direct$Block ),]
+
+study_points <- cbind.data.frame(Block = blocks$Block, long = blocks$Lon_1, lat = blocks$Lat_1, order = 1:length(blocks$Lon_1))
+
+
+ggplot() + 
+  geom_polygon(data = world, aes(x = long, y = lat, group = group), color = 'black', fill = 'white') + 
+  geom_point(data = study_points, aes(x = long, y = lat), color = 'red') +  
+  # geom_point(aes(x = -116, y = 76), color = 'black', size = 5) +
+  # geom_point(aes(x = -28, y = 40), color = 'black', size = 5) +
+  # geom_point(aes(x = -44, y = -4), color = 'black', size = 5) +
+  # geom_point(aes(x = -52, y = -32), color = 'black', size = 5) +
+  coord_quickmap(ylim=c(-40,80), xlim = c(-175,-20)) + theme_modern()
+
+
+library(tidyr)
+
+blockcoord <- cbind(study_points$long,study_points$lat)
+neigh      <- dnearneigh(blockcoord, d1 = 0, d2 = 1500, longlat = TRUE)
+winnb      <- nb2WB(neigh)    
+
+library(dplyr)
+direct$count <- 1
+
+releases <- clean.band %>% group_by(SEX_CODE,Age,BANDING_YEAR ) %>% summarize_at('BAND_NUM', length)
+encounters <-   direct %>% group_by(B_SEX_CODE,Age,BANDING_YEAR,Block ) %>% summarize_at('count', sum)
+
+encounters <- left_join(encounters,study_points)
+encounters2 <- rbind.data.frame(encounters[,c('BANDING_YEAR','Age','B_SEX_CODE', 'order', 'count')], 
+                                cbind.data.frame(BANDING_YEAR = c(2020,2021, 1962), Age = c(1,1,2), B_SEX_CODE = c(5,5,4), order = c(1,1,1),count = c(0,0,0)))
+
+encs <-  encounters2 %>% group_by(Age,B_SEX_CODE)  %>% spread(order, count, fill = 0) 
+
+enc_H_M <- data.matrix(subset(encs, Age == 1 & B_SEX_CODE == 4))
+enc_A_M <- data.matrix(subset(encs, Age == 2 & B_SEX_CODE == 4))
+enc_H_F <- data.matrix(subset(encs, Age == 1 & B_SEX_CODE == 5))
+enc_A_F <- data.matrix(subset(encs, Age == 2 & B_SEX_CODE == 5))
+
+
+library(tidyr)
+
+rel_H_M <- subset(releases, Age == 1 & SEX_CODE == 4)[,c('BANDING_YEAR', 'BAND_NUM')]
+rel_A_M <- subset(releases, Age == 2 & SEX_CODE == 4)[,c('BANDING_YEAR', 'BAND_NUM')]
+rel_H_F <- subset(releases, Age == 1 & SEX_CODE == 5)[,c('BANDING_YEAR', 'BAND_NUM')]
+rel_A_F <- subset(releases, Age == 2 & SEX_CODE == 5)[,c('BANDING_YEAR', 'BAND_NUM')]
+
+blocks <- nrow(blockcoord)
+marr <- array(0, dim = c(nrow(enc_H_M),blocks+1, 4))
+
+for(i in 1:62){
+  for(j in 1:blocks){
+    marr[i,j,1] <- enc_H_M[i,j+3]
+    marr[i,j,2] <- enc_H_F[i,j+3]
+    marr[i,j,3] <- enc_A_M[i,j+3]
+    marr[i,j,4] <- enc_A_F[i,j+3]
+  }
+
+    marr[i,(blocks+1),1] <- rel_H_M$BAND_NUM[i] - sum(marr[i,1:blocks,1])
+    marr[i,(blocks+1),2] <- rel_H_F$BAND_NUM[i] - sum(marr[i,1:blocks,2])
+    marr[i,(blocks+1),3] <- rel_A_M$BAND_NUM[i] - sum(marr[i,1:blocks,3])
+    marr[i,(blocks+1),4] <- rel_A_F$BAND_NUM[i] - sum(marr[i,1:blocks,4])
+}
+
+
+rel <- apply(marr, c(1,3), sum)
+
+library(nimble)
+
+library(abind)
+reporting <- read.csv("Estimated reporting rates, MALL & NOPI, 1948 to 2010.csv",header=TRUE)
+reporting <- subset(reporting, year >= 1990 )
+MU_R1 <- reporting$NOPI.rho
+SD_R1 <- reporting$NOPI.rho.SD
+
+MU_R <- c(MU_R1, rep(MU_R1[length(MU_R1)],dim(marr)[1]- length(MU_R1)))
+SD_R <- c(SD_R1, rep(SD_R1[length(MU_R1)],dim(marr)[1]- length(MU_R1)))
+
+
+nimble.car <- nimbleCode({
+  
+  for (t in 1:n.year){
+          rr[t] ~ dbeta(alpha.rr[t], beta.rr[t])
+    alpha.rr[t] <- pow(SD.rr[t],-2) * RR.rr[t]
+     beta.rr[t] <- pow(SD.rr[t],-2) * (1 - RR.rr[t])
+  }
+for(i in 1:2){
+   mu_lat[i]  ~ dlogis(0,1)
+   mu_lon[i]  ~ dlogis(0,1)
+  sig_lat[i]  ~ T(dt(0, pow(2.5, -2), 1),0,)
+  sig_lon[i]  ~ T(dt(0, pow(2.5, -2), 1),0,)
+}
+
+  for(j in 1:n.year){
+    b.lat[j] ~ dnorm(mu_lat[1], sd = sig_lat[1])
+    b.lon[j] ~ dnorm(mu_lon[1], sd = sig_lon[1])
+    a.lat[j] ~ dnorm(mu_lat[2], sd = sig_lat[2])
+    a.lon[j] ~ dnorm(mu_lon[2], sd = sig_lon[2])
+  }
+
+  for(s in 1:4){
+     mu[s] ~ dlogis(0,1)
+    sig[s] ~ T(dt(0, pow(2.5, -2), 1),0,)
+    for(k in 1:N.block){
+      b0[s,k] ~ dnorm(mu[s], sd = sig[s])
+    }
+  }
+        tau ~ T(dt(0, pow(2.5, -2), 1),0,)
+      omega ~ T(dt(0, pow(2.5, -2), 1),0,)
+    for(j in 1:n.year){
+         eps[1:N.block,j] ~ dcar_normal(adj[1:L.block], weights[1:L.block], num[1:N.block], tau, zero_mean = 1)
+    for(s in 1:4){  
+      for(k in 1:N.block){
+        psi0[j,k,s] <- exp(b0[s,k] + eps[k,j] + b.lat[j] * lat[k] + b.lon[j] * lon[k])# +  + a.lat[j] * alat[k] + a.lon[j] * alon[k] )
+      }
+        psi0[j,(N.block +1),s] <- 1
+      for(k in 1:(N.block+1)){
+        psi[j,k,s] <- psi0[j,k,s]/sum( psi0[j,1:(N.block +1),s])
+          h[j,k,s] <-  psi[j,k,s]/rr[j]
+      }
+      y[j,1:(N.block+1),s] ~ ddirchmulti(psi[j,1:(N.block+1),s] * omega,  Total[j,s])   
+    }
+  }
+  
+})
+  
+   CM <- as.carCM(winnb$adj, winnb$weights, winnb$num)
+
+  constants <- list(  n.year = 62, N.block = length(study_points$Block), L.block = length( winnb$weights),  
+                      lat = scale(study_points$lat)[,1], lon = scale(study_points$long)[,1],
+                      RR.rr = MU_R,SD.rr = SD_R,
+                      alat = scale(abs(scale(study_points$lat)[,1]))[,1], alon = scale(abs(scale(study_points$long)[,1]))[,1],
+                      weights = winnb$weights, num = winnb$num, adj = winnb$adj, Total= rel)
+  
+  data <- list(y = marr)
+  
+  initsFunction <- function()list( tau =0.025, eps = matrix(0, blocks, 62), mu = rep(-5,4), sig = rep(.1,4), b0 = matrix(-5,4,blocks),omega = 10000,
+                                   mu_lat = c(0,0), mu_lon = c(0,0), sig_lat = c(1,1), sig_lon = c(1,1), b.lat = rep(0,62), b.lon = rep(0,62), a.lat = rep(0,62), a.lon = rep(0,62)  )
+  inits <- initsFunction() 
+  
+  start_time <- Sys.time()
+  library(parallel)
+  library(coda)
+  nc <- 3 # number of chains
+  
+  cl_nopi<-makeCluster(nc,timeout=5184000)
+  
+  clusterExport(cl_nopi, c("nimble.car", "inits", "data", "constants", "nimble.pars"))
+  
+  for (j in seq_along(cl_nopi)) {
+    
+    nimble.inits <- initsFunction() 
+    clusterExport(cl_nopi[j], "inits")
+  }
+  out <- clusterEvalQ(cl_nopi, {
+    library(nimble)
+    library(coda)
+  library(parallel)
+  library(nimbleNoBounds)
+  ddirchmulti <- nimbleFunction(
+    run = function(x = double(1), alpha = double(1), size = double(0), 
+                   log = integer(0, default = 0)) {
+      returnType(double(0))
+      logProb <- lgamma(size+1) - sum(lgamma(x+1)) + lgamma(sum(alpha)) -
+        sum(lgamma(alpha)) + sum(lgamma(alpha + x)) -
+        lgamma(sum(alpha) + size)
+      if(log) return(logProb)
+      else return(exp(logProb))
+    })
+  
+  rdirchmulti <- nimbleFunction(
+    run = function(n = integer(0), alpha = double(1), size = double(0)) {
+      returnType(double(1))
+      if(n != 1) print("rdirchmulti only allows n = 1; using n = 1.")
+      p <- rdirch(1, alpha)
+      return(rmulti(1, size = size, prob = p))
+    })
+  
+  dInvGamma <- nimbleFunction (
+    run = function(x     = double(0),
+                   Shape = double(0, default=1), 
+                   Scale = double(0, default=1), 
+                   log   = integer(0, default = 0)) {
+      returnType(double(0))
+      logDensX = dgamma(x, shape=Shape, scale=Scale, log=TRUE) 
+      if (log) return(logDensX) else return(exp(logDensX)) 
+    }
+  )
+  
+  rInvGamma <- nimbleFunction (
+    run = function(n = integer(0, default=1),
+                   Shape = double(0, default=1), 
+                   Scale = double(0, default=1)) {
+      returnType(double(0))
+      if (n!=1)
+        stop("Only implimented for n=1")
+      x = rgamma(n=1, shape=Shape, scale=Scale)    
+      return(x)
+    }
+  )
+  
+  registerDistributions(list(dInvGamma = list(
+    BUGSdist = "dInvGamma(Shape,Scale)",
+    discrete = FALSE,
+    range    = c(0, Inf), 
+    pqAvail  = FALSE)))
+  
+  model <- nimbleModel( code = nimble.car, constants = constants,  dat =  data, inits = inits)
+  
+  model$initializeInfo()
+  model$simulate(c('rr','h'))
+  model$calculate()
+  
+  modelConf  <- configureMCMC(model, useConjugacy = FALSE,thin2 = 5, 
+                              monitors = c('tau','omega','mu','sig', 'b0'),
+                              monitors2 = c('h','psi'))
+  
+  modelMCMC  <- buildMCMC( modelConf )
+  Cmodel     <- compileNimble(model)
+  CmodelMCMC <- compileNimble(modelMCMC)
+  
+  CmodelMCMC$run(1000, thin = 2, thin2 = 10, reset = FALSE)
+  
+  return(list( as.mcmc(as.matrix(CmodelMCMC$mvSamples)),as.mcmc(as.matrix(CmodelMCMC$mvSamples2))))
+  })
+  end_time <- Sys.time()
+  end_time - start_time
+  
+  samples2 <- list(chain1 =   out[[1]][[1]][-c(1:251),], 
+                   chain2 =   out[[2]][[1]][-c(1:251),], 
+                   chain3 =   out[[3]][[1]][-c(1:251),])
+  
+  samples1    <- list(chain1 =   out[[1]][[2]][-c(1:51),], 
+                      chain2 =   out[[2]][[2]][-c(1:51),], 
+                      chain3 =   out[[3]][[2]][-c(1:51),])
+  
+  mcmcList1 <- as.mcmc.list(lapply(samples1, mcmc))
+  mcmcList2 <- as.mcmc.list(lapply(samples2, mcmc))
+  
+  
+  save(mcmcList1, mcmcList2, file = 'pintail_results.rdata')
+  
+  
+   mcmcList1 <-  as.mcmc(as.matrix(CmodelMCMC$mvSamples)[-1,])
+   mcmcList2 <- as.mcmc(as.matrix(CmodelMCMC$mvSamples2)[-1,])
+  
+library(MCMCvis)
+                                   
+   start_time <- Sys.time()
+   out2 <- clusterEvalQ(cl_nopi, {
+     CmodelMCMC$run(10000, reset = FALSE, thin = 2, thin2 = 10)
+     return(list( as.mcmc(as.matrix(CmodelMCMC$mvSamples)),
+                  as.mcmc(as.matrix(CmodelMCMC$mvSamples2))))
+     
+   })
+   
+   
+   
+   samples2 <- list(chain1 =   out2[[1]][[1]][-c(1:2501),], 
+                    chain2 =   out2[[2]][[1]][-c(1:2501),], 
+                    chain3 =   out2[[3]][[1]][-c(1:2501),])
+   
+   samples1    <- list(chain1 =   out2[[1]][[2]][-c(1:501),], 
+                       chain2 =   out2[[2]][[2]][-c(1:501),], 
+                       chain3 =   out2[[3]][[2]][-c(1:501),])
+   
+   mcmcList1 <- as.mcmc.list(lapply(samples1, mcmc))
+   mcmcList2 <- as.mcmc.list(lapply(samples2, mcmc))
+   
+  library(MCMCvis)
+  library(reshape)
+   
+   #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+   obs <- direct[,c('Age','B_SEX_CODE','E_LAT_DECIMAL_DEGREES', 'E_LON_DECIMAL_DEGREES','ENCOUNTER_YEAR')]
+   
+   obs$type <- ifelse(obs$Age == 1 & obs$B_SEX_CODE == 4, 'HY-male',
+                      ifelse(obs$Age == 1 & obs$B_SEX_CODE == 5, 'HY-female',
+                             ifelse(obs$Age == 2 & obs$B_SEX_CODE == 4, 'AHY-male',
+                                    ifelse(obs$Age == 2 & obs$B_SEX_CODE == 5, 'AHY-female','cut'))))
+   
+   colnames(obs) <- c('Age','Sex','lat','long','year','type')
+   
+  b_0 <- MCMCpstr(mcmcList2, params = 'b0')$b0
+  b_0_melt <- melt(b_0)
+  
+  b_0_melt <- cbind.data.frame(b_0_melt, expand.grid(type = c('HY-male','HY-female','AHY-male','AHY-female'), order = 1:blocks))
+  b_0_melt <- left_join(b_0_melt,study_points)
+  b_0_melt$exp_value <- exp(b_0_melt$value)
+  
+  ggplot(data = b_0_melt) + 
+    geom_tile(data = b_0_melt, aes(x = long, y = lat, fill = round(exp_value,3))) +
+    geom_polygon(data = world, aes(x = long, y = lat, group = group), color = 'black', fill = NA) + 
+    geom_count(data = obs, aes(x = long, y = lat),  color = 'black')+
+    labs(x = 'Longitude', y = 'Latitude', fill = 'Mean') +
+    scale_fill_metro_c()+ facet_wrap(~type, ncol = 2)+
+    coord_quickmap(ylim=c(-10,60), xlim = c(-130,-50)) + theme_modern(legend.position = 'top', legend.text.size = 12)
+  
+  psi <-  MCMCpstr(mcmcList1, params= 'h')$h
+  psi_1 <- melt(psi)
+  psi_1 <- cbind.data.frame(psi_1, expand.grid(year = 1961:2022, order = 1:(blocks+1), type =  c('HY-male','HY-female','AHY-male','AHY-female')))
+  psi_1 <- subset(psi_1, order != (blocks+1))
+  psi_1 <- left_join(psi_1, study_points)
+  
+  library(gganimate)
+  
+  s1 <-  ggplot(data = psi_1) + 
+         geom_tile(data = psi_1, aes(x = long, y = lat, fill = value)) +
+         geom_count(data = obs, aes(x = long, y = lat),  color = 'red')+
+         geom_polygon(data = world, aes(x = long, y = lat, group = group), color = 'black', fill = NA) + 
+         transition_time(year) + ease_aes('linear') +
+         labs(title = 'Year: {frame_time}', x = 'Longitude', y = 'Latitude', fill = 'Harvest\nRate', size = 'Number') +
+         scale_fill_metro_c()+ facet_wrap(~type, ncol = 2)+
+         coord_quickmap(ylim=c(20,70), xlim = c(-175,-50)) +
+         theme_modern(base_size = 14, axis.title.size = 18, legend.text.size = 18, legend.title.size = 18, legend.position = 'right') 
+  
+  animate(s1,fps=1, renderer = gifski_renderer())
+  anim_save("pintail.gif", s1,  height = 1200, width =1200, fps  = 1.5)
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+  
