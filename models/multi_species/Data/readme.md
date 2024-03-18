@@ -9,3 +9,8 @@ north_america_wdef.csv consists of the annual (1960 - 2019) estimates of summer-
 wetland_habitat.csv: The amount of wetland habitat (km^2) that remained in each recovery region (State, Province, Mexico) for each decade from 1960 - 2020. Data were acquired from https://zenodo.org/records/7293597 as part of https://www.nature.com/articles/s41586-022-05572-6. Data occur at the decade-scale and were down-scaled through R-scripts to correspond to wetland habitat in each recovery region.
 
 delta_wetland_habitat.csv: The change in the amount of wetland habitat (km^2) since the last decade in each recovery region (State, Province, Mexico) for each decade from 1960 - 2020. Data were acquired from https://zenodo.org/records/7293597 as part of https://www.nature.com/articles/s41586-022-05572-6. Data occur at the decade-scale and were down-scaled through R-scripts to correspond to wetland habitat in each recovery region.
+
+
+three_species.rdata: This data file hosts all the data, constants, model code, and inital values necessary to run spatially-explicit population model (harvest_analysis.R) for Mallards, Blue-winged teal, and Northern pintail.
+
+six_species.rdata: This data file hosts all the data, constants, model code, and inital values necessary to run spatially-explicit population model (harvest_analysis.R) for Mallards, Blue-winged teal, and Northern pintail as well as Gadwall, Green-winged teal, and American wigeon. 
