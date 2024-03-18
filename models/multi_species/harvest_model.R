@@ -1,4 +1,41 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# Contents:
+# The model code and data necessary to run the multispecies spatially-explicit direct recovery harvest model in the Nimble program language.
+# The six-species model, and likely the three-species model, requires access to a more advanced computation cluster due to the physical size of the model space.
+# 
+# Section A) Data and Library prep
+# Section B) Model Code
+# Section C) Model Run
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+
+########################################################################################################################
+# Section A: Load libraries and Data
+########################################################################################################################
+# Load libraries
+library(nimble)
+library(RColorBrewer)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(coda)
+
+# Load three or six-species data/model packages
+#load('six_species.rdata')
+load('three_species.rdata')
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# Data Contents:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# 1) harvest_model: Nimble model code for the spatially-explicit harvest model (also presented below if changes need to be made)
+# 2) nimble.data: The nimble data file necessary to run the harvest model. Consists of the band-recoveries for the multispecies model and the control-reward band study
+# 3) nimble.constants: A list of the structural constants, identifiers, and covariate data necessary to run the harvest model
+# 4) initsFunction: The function used to generate initial values. 
+# The initsfunction may not work, but inits_1, inits_2, and inits_3 and three random realizations of initial values that can be used to start the Bayesian updating procedure.
+
+
+########################################################################################################################
+# Section B: Model Code
+########################################################################################################################
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 # Start Nimble Model Code
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 harvest_model <- nimbleCode({
@@ -206,3 +243,94 @@ harvest_model <- nimbleCode({
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 # End Nimble Model Code
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+
+########################################################################################################################
+# Section C: Model Run
+########################################################################################################################
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# Nimble parallel process model run
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+inits <- list(inits_1, inits_2, inits_3)
+
+nc <- 3 # number of chains
+
+cl <-makeCluster(nc,timeout=5184000)
+
+clusterExport(cl, c("harvest_model", "inits", "nimble.data", "nimble.constants"))
+
+for (j in seq_along(cl)) {
+  
+  clusterExport(cl[j], "inits")
+}
+
+out <- clusterEvalQ(cl, {
+  library(nimble)
+  library(coda)
+model <- nimbleModel( code = harvest_model, constants = nimble.constants,  dat =  nimble.data, inits = inits[[j]])
+
+model$initializeInfo()
+
+model$calculate()
+
+modelConf  <- configureMCMC(model, useConjugacy = FALSE,thin2 = 5,
+                            
+                            monitors = c('mean.psi','mu.psi','global_mu','global_sigma', 'rc_adj','rho','beta_trend','beta_delta','beta_wetland','beta_wet_delta',
+                                         'local_sigma','sigma_space','sig_time', 'beta_def','mu_beta','sig_def','beta_temp', 'mu_trend','temp_trend',
+                                         'rr_keep','mu_rr','sd_rr')) #,
+                            
+                           # monitors2 = c('kappa','kap')) # monitoring these parameters requires a lot of HD space
+
+modelMCMC  <- buildMCMC( modelConf )
+Cmodel     <- compileNimble(model)
+CmodelMCMC <- compileNimble(modelMCMC)
+
+CmodelMCMC$run(5000, thin = 2, thin2 = 10, reset = FALSE)
+
+return(list( as.mcmc(as.matrix(CmodelMCMC$mvSamples)),
+             as.mcmc(as.matrix(CmodelMCMC$mvSamples2))))
+
+# return(as.mcmc(out1))
+})
+
+burn <- 500
+
+samples1 <- list(chain1 =   out[[1]][[1]][-c(1:(burn+1),], 
+                 chain2 =   out[[2]][[1]][-c(1:(burn+1),],
+                 chain3 =   out[[3]][[1]][-c(1:(burn+1),])
+
+
+samples2 <- list(chain1 =   out[[1]][[2]][-c(1:(burn/5+1),], 
+                 chain2 =   out[[2]][[2]][-c(1:(burn/5+1),],
+                 chain3 =   out[[3]][[2]][-c(1:(burn/5+1),])
+
+
+mcmcList1 <- as.mcmc.list(lapply(samples1, mcmc))
+mcmcList2 <- as.mcmc.list(lapply(samples2, mcmc))
+
+# Continue running the model
+
+start_time <- Sys.time()
+out2 <- clusterEvalQ(cl, {
+  CmodelMCMC$run(5000, reset = FALSE, thin = 2, thin2 = 10)
+  return(list( as.mcmc(as.matrix(CmodelMCMC$mvSamples)),
+               as.mcmc(as.matrix(CmodelMCMC$mvSamples2))))
+  
+})
+
+end_time <- Sys.time()
+end_time - start_time
+
+burn <- 500
+
+samples1 <- list(chain1 =   out2[[1]][[1]][-c(1:(burn+1),], 
+                 chain2 =   out2[[2]][[1]][-c(1:(burn+1),],
+                 chain3 =   out2[[3]][[1]][-c(1:(burn+1),])
+
+
+samples2 <- list(chain1 =   out2[[1]][[2]][-c(1:(burn/5+1),], 
+                 chain2 =   out2[[2]][[2]][-c(1:(burn/5+1),],
+                 chain3 =   out2[[3]][[2]][-c(1:(burn/5+1),])
+
+mcmcList1 <- as.mcmc.list(lapply(samples1, mcmc))
+mcmcList2 <- as.mcmc.list(lapply(samples2, mcmc))
